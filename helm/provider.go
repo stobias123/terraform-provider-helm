@@ -3,8 +3,11 @@ package helm
 import (
 	"context"
 	"fmt"
+	"github.com/helm/helm-2to3/pkg/common"
+	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -132,7 +135,8 @@ func Provider() *schema.Provider {
 			},
 		},
 		ResourcesMap: map[string]*schema.Resource{
-			"helm_release": resourceRelease(),
+			"helm_release":        resourceRelease(),
+			"helm_2to3_migration": resourceMigration(),
 		},
 		DataSourcesMap: map[string]*schema.Resource{
 			"helm_template": dataTemplate(),
@@ -375,6 +379,35 @@ func (m *Meta) GetHelmConfiguration(namespace string) (*action.Configuration, er
 	}
 	debug("[INFO] GetHelmConfiguration success")
 	return actionConfig, nil
+}
+
+// TODO: Maybe check to see if tiller is reachable. TBD.
+func (m *Meta) GetHelmV2ConfigurationInfo() (*common.KubeConfig, error) {
+	configData := m.data
+	configPaths := []string{}
+
+	if v, ok := k8sGetOk(configData, "config_path"); ok && v != "" {
+		configPaths = []string{v.(string)}
+	} else if v, ok := k8sGetOk(configData, "config_paths"); ok {
+		for _, p := range v.([]interface{}) {
+			configPaths = append(configPaths, p.(string))
+		}
+	} else if v := os.Getenv("KUBE_CONFIG_PATHS"); v != "" {
+		// NOTE we have to do this here because the schema
+		// does not yet allow you to set a default for a TypeList
+		configPaths = filepath.SplitList(v)
+	}
+	// TODO: This is changing provider behavior again. ConfigContext is not mandatory.
+	ctx, ctxOk := k8sGetOk(configData, "config_context")
+	if !ctxOk {
+		ctx = clientcmdapi.Context{}
+		log.Printf("[DEBUG] Using default k8s context")
+	}
+	return &common.KubeConfig{
+		Context: ctx.(string),
+		//TODO: This is hacky, maybe update commonKubeconfig to fix.
+		File: configPaths[0],
+	}, nil
 }
 
 func debug(format string, a ...interface{}) {
